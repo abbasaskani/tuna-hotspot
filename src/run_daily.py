@@ -1,6 +1,6 @@
 import json
 import os
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, timezone
 
 import numpy as np
 import xarray as xr
@@ -9,370 +9,437 @@ from matplotlib.path import Path
 
 import copernicusmarine as cm
 
-
-# ------------------------
-# Paths
-# ------------------------
 AOI_PATH = "config/aoi.geojson"
 OUT_DIR = "docs/latest"
 os.makedirs(OUT_DIR, exist_ok=True)
 
-# ------------------------
-# Dataset IDs (Stable daily ops: use forecast models)
-# 1) Physics (temp/currents/sea level) - daily
-# 2) BGC optics (chlorophyll) - daily
-# 3) Waves (SWH) - 3-hourly
-# ------------------------
-TEMP_DATASET = "cmems_mod_glo_phy-thetao_anfc_0.083deg_P1D-m"          # temperature
-CUR_DATASET  = "cmems_mod_glo_phy-cur_anfc_0.083deg_P1D-m"            # currents
-SL_DATASET   = "cmems_mod_glo_phy_anfc_merged-sl_PT1H-i"              # sea level (hourly)
+# ---------------------------
+# DATASETS (Robust MVP)
+# ---------------------------
+# 1) SST: MetOffice L4 NRT
+SST_DATASET = "METOFFICE-GLO-SST-L4-NRT-OBS-SST-V2"
+PREF_SST_VARS = ["analysed_sst", "sst", "sea_surface_temperature"]
 
-CHL_DATASET  = "cmems_mod_glo_bgc-optics_anfc_0.25deg_P1D-m"           # chlorophyll optics (daily)
+# 2) Chlorophyll: Satellite NRT L4 gapfree (stable daily)
+# Product: OCEANCOLOUR_GLO_BGC_L4_NRT_009_102 (dataset below)
+CHL_DATASET = "cmems_obs-oc_glo_bgc-plankton_nrt_l4-gapfree-multi-4km_P1D"
+PREF_CHL_VARS = ["CHL", "chl", "chlor_a", "chlorophyll"]
 
-WAV_DATASET  = "cmems_mod_glo_wav_anfc_0.083deg_PT3H-i"               # waves (3-hourly)
+# 3) Surface currents (hourly, merged surface)
+UV_DATASET = "cmems_mod_glo_phy_anfc_merged-uv_PT1H-i"
+PREF_U_VARS = ["uo", "u", "eastward_sea_water_velocity"]
+PREF_V_VARS = ["vo", "v", "northward_sea_water_velocity"]
 
-# Variable preferences (we will pick the first one that exists)
-PREF_TEMP_VARS = ["thetao", "temperature", "to"]
-PREF_U_VARS    = ["uo", "u", "eastward_sea_water_velocity"]
-PREF_V_VARS    = ["vo", "v", "northward_sea_water_velocity"]
-PREF_SL_VARS   = ["zos", "sea_surface_height", "ssh", "sla"]
-PREF_CHL_VARS  = ["CHL", "chl", "chlorophyll", "chlor_a"]
-PREF_SWH_VARS  = ["VHM0", "swh", "hs", "significant_height_of_combined_wind_waves_and_swell"]
+# 4) Sea level (hourly, merged)
+SL_DATASET = "cmems_mod_glo_phy_anfc_merged-sl_PT1H-i"
+PREF_SL_VARS = ["zos", "sla", "sea_surface_height", "adt"]
 
-# Scoring weights (baseline – can be tuned later)
-W_FRONT_TEMP = 0.22
-W_FRONT_CHL  = 0.22
-W_EDDY_SL    = 0.18
-W_CONVERGENCE = 0.10
-W_SUIT_TEMP  = 0.10
-W_SUIT_CHL   = 0.10
-W_WAVE_PENALTY = 0.08  # subtracted
+# 5) Waves (if available; optional but recommended)
+WAV_DATASET = "cmems_mod_glo_wav_anfc_0.083deg_PT3H-i"
+PREF_WAV_VARS = ["VHM0", "swh", "significant_height_of_combined_wind_waves_and_swell"]
 
-# Operational knobs
-TOP_N = 10
-LOOKBACK_DAYS = 21  # robust against data lags
+# 6) Wind (NRT hourly L4; optional)
+WIND_DATASET = "cmems_obs-wind_glo_phy_nrt_l4_0.125deg_PT1H"
+PREF_WIND_U = ["eastward_wind", "u10", "u"]
+PREF_WIND_V = ["northward_wind", "v10", "v"]
 
+# ---------------------------
+# Utility
+# ---------------------------
 
-def read_aoi_polygon(path: str):
-    gj = json.load(open(path, "r", encoding="utf-8"))
-    coords = gj["features"][0]["geometry"]["coordinates"][0]
-    return coords  # list of [lon, lat]
+def read_aoi(aoi_path: str):
+    gj = json.load(open(aoi_path, "r", encoding="utf-8"))
+    poly = gj["features"][0]["geometry"]["coordinates"][0]  # list of [lon, lat]
+    lons = [p[0] for p in poly]
+    lats = [p[1] for p in poly]
+    bbox = (min(lons), max(lons), min(lats), max(lats))
+    return poly, bbox
 
+def get_lon_lat_names(ds: xr.Dataset):
+    # Common coordinate names in CMEMS
+    lon_candidates = ["longitude", "lon", "LONGITUDE", "x"]
+    lat_candidates = ["latitude", "lat", "LATITUDE", "y"]
+    lon = next((c for c in lon_candidates if c in ds.coords), None)
+    lat = next((c for c in lat_candidates if c in ds.coords), None)
+    if lon is None or lat is None:
+        raise RuntimeError(f"Could not detect lon/lat coords. coords={list(ds.coords)}")
+    return lon, lat
 
-def bbox_from_polygon(coords):
-    lons = [c[0] for c in coords]
-    lats = [c[1] for c in coords]
-    return min(lons), max(lons), min(lats), max(lats)
-
-
-def polygon_mask(lons2d, lats2d, polygon_coords):
-    # polygon coords: [[lon,lat], ...]
-    poly = Path(np.array(polygon_coords))
-    pts = np.vstack([lons2d.ravel(), lats2d.ravel()]).T
-    inside = poly.contains_points(pts).reshape(lons2d.shape)
-    return inside
-
-
-def safe_pick_var(ds: xr.Dataset, prefer):
+def pick_var_from_dataset(ds: xr.Dataset, prefer: list[str]):
+    vars_ = list(ds.data_vars.keys())
     for p in prefer:
-        if p in ds.data_vars:
+        if p in vars_:
             return p
-    return list(ds.data_vars.keys())[0]
+    # fallback: pick first variable
+    if not vars_:
+        raise RuntimeError("Dataset has no data_vars.")
+    return vars_[0]
 
+def to_2d_field(da: xr.DataArray):
+    # reduce time/depth dimensions if present
+    if "time" in da.dims:
+        da = da.isel(time=0)
+    if "depth" in da.dims:
+        da = da.isel(depth=0)
+    return da
 
-def standardize_latlon(ds: xr.Dataset):
-    ren = {}
-    if "lat" in ds.coords and "latitude" not in ds.coords:
-        ren["lat"] = "latitude"
-    if "lon" in ds.coords and "longitude" not in ds.coords:
-        ren["lon"] = "longitude"
-    if ren:
-        ds = ds.rename(ren)
-    return ds
-
-
-def try_open_small(dataset_id: str, day: date, bbox, prefer_vars, depth0=None):
-    """
-    Open a tiny subset (single day) to discover variable names robustly.
-    Uses coordinates_selection_method='nearest' to avoid boundary errors.
-    """
-    min_lon, max_lon, min_lat, max_lat = bbox
-    mid_lon = (min_lon + max_lon) / 2.0
-    mid_lat = (min_lat + max_lat) / 2.0
-
-    start = datetime(day.year, day.month, day.day)
-    end = start  # IMPORTANT: avoid end+1day boundary issues
-
-    kwargs = dict(
+def open_point_nearest(dataset_id: str, when: datetime, lon0: float, lat0: float):
+    # minimal load (point), nearest selection avoids out-of-bounds failures
+    # coordinates_selection_method applies to lon/lat/time/depth per CMEMS toolbox docs
+    ds = cm.open_dataset(
         dataset_id=dataset_id,
-        minimum_longitude=mid_lon, maximum_longitude=mid_lon,
-        minimum_latitude=mid_lat, maximum_latitude=mid_lat,
-        start_datetime=start.strftime("%Y-%m-%dT%H:%M:%S"),
-        end_datetime=end.strftime("%Y-%m-%dT%H:%M:%S"),
+        minimum_longitude=lon0, maximum_longitude=lon0,
+        minimum_latitude=lat0, maximum_latitude=lat0,
+        start_datetime=when.strftime("%Y-%m-%dT%H:%M:%S"),
+        end_datetime=when.strftime("%Y-%m-%dT%H:%M:%S"),
         coordinates_selection_method="nearest",
     )
-    if depth0 is not None:
-        kwargs.update(minimum_depth=depth0, maximum_depth=depth0)
+    return ds
 
-    ds = cm.open_dataset(**kwargs)
-    ds = standardize_latlon(ds)
-    v = safe_pick_var(ds, prefer_vars)
-    return v
-
-
-def subset_to_netcdf(dataset_id: str, var: str, day: date, bbox, out_path: str, depth0=None):
-    """
-    Download subset to NetCDF.
-    """
+def find_latest_available_time(dataset_id: str, bbox, lookback_days: int = 30):
+    # Some CMEMS products lag by ~1-3 days; wind can lag more.
     min_lon, max_lon, min_lat, max_lat = bbox
-    start = datetime(day.year, day.month, day.day)
-    end = start  # IMPORTANT: same-day selection
+    lon0 = (min_lon + max_lon) / 2.0
+    lat0 = (min_lat + max_lat) / 2.0
 
-    kwargs = dict(
+    now = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+
+    last_err = None
+    for d in range(lookback_days + 1):
+        cand = now - timedelta(days=d)
+        try:
+            ds = open_point_nearest(dataset_id, cand, lon0, lat0)
+            # If dataset has time coordinate, return nearest actual time
+            if "time" in ds.coords:
+                t = ds["time"].values
+                # numpy datetime64 -> python datetime
+                t0 = np.atleast_1d(t)[0]
+                # convert safely
+                when = np.datetime64(t0).astype("datetime64[s]").astype(datetime).replace(tzinfo=timezone.utc)
+                return when
+            # No time coord (static) -> return cand
+            return cand
+        except Exception as e:
+            last_err = e
+
+    raise RuntimeError(f"Could not find available time within {lookback_days} days for {dataset_id}. Last error: {last_err}")
+
+def subset_to_netcdf(dataset_id: str, variables: list[str], when: datetime, bbox, out_path: str):
+    min_lon, max_lon, min_lat, max_lat = bbox
+    cm.subset(
         dataset_id=dataset_id,
-        variables=[var],
+        variables=variables,
         minimum_longitude=min_lon, maximum_longitude=max_lon,
         minimum_latitude=min_lat, maximum_latitude=max_lat,
-        start_datetime=start.strftime("%Y-%m-%dT%H:%M:%S"),
-        end_datetime=end.strftime("%Y-%m-%dT%H:%M:%S"),
+        start_datetime=when.strftime("%Y-%m-%dT%H:%M:%S"),
+        end_datetime=when.strftime("%Y-%m-%dT%H:%M:%S"),
         file_format="netcdf",
         output_directory=os.path.dirname(out_path),
         output_filename=os.path.basename(out_path),
         overwrite=True,
         coordinates_selection_method="nearest",
     )
-    if depth0 is not None:
-        kwargs.update(minimum_depth=depth0, maximum_depth=depth0)
-
-    cm.subset(**kwargs)
     return out_path
 
+def polygon_mask(poly_lonlat, grid_lons_2d, grid_lats_2d):
+    poly = np.array(poly_lonlat, dtype=float)
+    path = Path(poly)  # expects Nx2 (lon,lat)
+    pts = np.column_stack([grid_lons_2d.ravel(), grid_lats_2d.ravel()])
+    inside = path.contains_points(pts).reshape(grid_lons_2d.shape)
+    return inside
 
-def find_working_day(dataset_id: str, bbox, prefer_vars, depth0=None, lookback_days=LOOKBACK_DAYS):
-    """
-    Find the most recent day within lookback that can be opened.
-    """
-    today = datetime.utcnow().date()
-    last_err = None
-    for k in range(0, lookback_days + 1):
-        d = today - timedelta(days=k)
-        try:
-            _ = try_open_small(dataset_id, d, bbox, prefer_vars, depth0=depth0)
-            return d
-        except Exception as e:
-            last_err = e
-            continue
-    raise RuntimeError(f"Could not find an available day within {lookback_days} days for {dataset_id}. Last error: {last_err}")
+def normalize01(a):
+    a = np.array(a, dtype=float)
+    m = np.nanmin(a)
+    M = np.nanmax(a)
+    return (a - m) / (M - m + 1e-12)
 
-
-def grad_mag(da: xr.DataArray):
-    a = da.values.astype("float64")
-    gy, gx = np.gradient(a)
+def grad_mag(a2d):
+    gy, gx = np.gradient(a2d)
     return np.sqrt(gx * gx + gy * gy)
 
+def sigmoid(x):
+    return 1.0 / (1.0 + np.exp(-x))
 
-def norm01(x):
-    x = np.array(x, dtype="float64")
-    mn = np.nanmin(x)
-    mx = np.nanmax(x)
-    return (x - mn) / (mx - mn + 1e-12)
-
-
-def gaussian_suitability(x, mu, sigma):
-    return np.exp(-0.5 * ((x - mu) / (sigma + 1e-12)) ** 2)
-
-
+# ---------------------------
+# Main
+# ---------------------------
 def main():
     print("Reading AOI...")
-    poly = read_aoi_polygon(AOI_PATH)
-    bbox = bbox_from_polygon(poly)
+    poly, bbox = read_aoi(AOI_PATH)
 
-    # 1) Pick a common date that exists across all needed datasets
     print("Finding latest available dates...")
-    # Physics: use surface depth0 ~ 0 (nearest)
-    d_temp = find_working_day(TEMP_DATASET, bbox, PREF_TEMP_VARS, depth0=0)
-    d_cur  = find_working_day(CUR_DATASET,  bbox, PREF_U_VARS, depth0=0)   # u check
-    d_sl   = find_working_day(SL_DATASET,   bbox, PREF_SL_VARS, depth0=None)
-    d_chl  = find_working_day(CHL_DATASET,  bbox, PREF_CHL_VARS, depth0=None)
-    d_wav  = find_working_day(WAV_DATASET,  bbox, PREF_SWH_VARS, depth0=None)
+    t_sst = find_latest_available_time(SST_DATASET, bbox, lookback_days=10)
+    t_chl = find_latest_available_time(CHL_DATASET, bbox, lookback_days=10)
+    t_uv  = find_latest_available_time(UV_DATASET,  bbox, lookback_days=10)
+    t_sl  = find_latest_available_time(SL_DATASET,  bbox, lookback_days=10)
 
-    day = min(d_temp, d_cur, d_sl, d_chl, d_wav)
-    print(f"Processing date (common): {day.isoformat()}")
+    # waves/wind are optional (may lag more)
+    try:
+        t_wav = find_latest_available_time(WAV_DATASET, bbox, lookback_days=14)
+    except Exception:
+        t_wav = None
 
-    # 2) Discover variable names safely
-    print("Selecting variables...")
-    temp_var = try_open_small(TEMP_DATASET, day, bbox, PREF_TEMP_VARS, depth0=0)
-    u_var    = try_open_small(CUR_DATASET,  day, bbox, PREF_U_VARS, depth0=0)
-    v_var    = try_open_small(CUR_DATASET,  day, bbox, PREF_V_VARS, depth0=0)
-    sl_var   = try_open_small(SL_DATASET,   day, bbox, PREF_SL_VARS, depth0=None)
-    chl_var  = try_open_small(CHL_DATASET,  day, bbox, PREF_CHL_VARS, depth0=None)
-    swh_var  = try_open_small(WAV_DATASET,  day, bbox, PREF_SWH_VARS, depth0=None)
+    try:
+        t_wind = find_latest_available_time(WIND_DATASET, bbox, lookback_days=21)
+    except Exception:
+        t_wind = None
 
-    # 3) Download subsets
+    meta = {
+        "sst_time_used_utc": t_sst.isoformat(),
+        "chl_time_used_utc": t_chl.isoformat(),
+        "uv_time_used_utc":  t_uv.isoformat(),
+        "sl_time_used_utc":  t_sl.isoformat(),
+        "wav_time_used_utc": t_wav.isoformat() if t_wav else None,
+        "wind_time_used_utc": t_wind.isoformat() if t_wind else None,
+        "bbox": {"min_lon": bbox[0], "max_lon": bbox[1], "min_lat": bbox[2], "max_lat": bbox[3]},
+    }
+
     print("Downloading subsets...")
-    temp_nc = subset_to_netcdf(TEMP_DATASET, temp_var, day, bbox, "/tmp/temp.nc", depth0=0)
-    u_nc    = subset_to_netcdf(CUR_DATASET,  u_var,    day, bbox, "/tmp/u.nc",    depth0=0)
-    v_nc    = subset_to_netcdf(CUR_DATASET,  v_var,    day, bbox, "/tmp/v.nc",    depth0=0)
-    sl_nc   = subset_to_netcdf(SL_DATASET,   sl_var,   day, bbox, "/tmp/sl.nc",   depth0=None)
-    chl_nc  = subset_to_netcdf(CHL_DATASET,  chl_var,  day, bbox, "/tmp/chl.nc",  depth0=None)
-    wav_nc  = subset_to_netcdf(WAV_DATASET,  swh_var,  day, bbox, "/tmp/wav.nc",  depth0=None)
+    tmp_dir = "/tmp"
+    os.makedirs(tmp_dir, exist_ok=True)
 
-    # 4) Load datasets
-    ds_temp = standardize_latlon(xr.open_dataset(temp_nc))
-    ds_u    = standardize_latlon(xr.open_dataset(u_nc))
-    ds_v    = standardize_latlon(xr.open_dataset(v_nc))
-    ds_sl   = standardize_latlon(xr.open_dataset(sl_nc))
-    ds_chl  = standardize_latlon(xr.open_dataset(chl_nc))
-    ds_wav  = standardize_latlon(xr.open_dataset(wav_nc))
+    # SST
+    ds_sst_pt = open_point_nearest(SST_DATASET, t_sst, (bbox[0]+bbox[1])/2, (bbox[2]+bbox[3])/2)
+    sst_var = pick_var_from_dataset(ds_sst_pt, PREF_SST_VARS)
+    meta["sst_var"] = sst_var
+    sst_nc = subset_to_netcdf(SST_DATASET, [sst_var], t_sst, bbox, f"{tmp_dir}/sst.nc")
+    ds_sst = xr.open_dataset(sst_nc)
+    lon_name, lat_name = get_lon_lat_names(ds_sst)
+    sst = to_2d_field(ds_sst[sst_var])
 
-    # Time selection (some are hourly/3-hourly)
-    def first_time(da):
-        if "time" in da.dims:
-            return da.isel(time=0)
-        return da
+    # CHL
+    ds_chl_pt = open_point_nearest(CHL_DATASET, t_chl, (bbox[0]+bbox[1])/2, (bbox[2]+bbox[3])/2)
+    chl_var = pick_var_from_dataset(ds_chl_pt, PREF_CHL_VARS)
+    meta["chl_var"] = chl_var
+    chl_nc = subset_to_netcdf(CHL_DATASET, [chl_var], t_chl, bbox, f"{tmp_dir}/chl.nc")
+    ds_chl = xr.open_dataset(chl_nc)
+    chl = to_2d_field(ds_chl[chl_var])
 
-    temp = first_time(ds_temp[temp_var])
-    u    = first_time(ds_u[u_var])
-    v    = first_time(ds_v[v_var])
-    sl   = first_time(ds_sl[sl_var])
-    chl  = first_time(ds_chl[chl_var])
-    swh  = first_time(ds_wav[swh_var])
+    # Regrid CHL onto SST grid (if grids differ)
+    if (lon_name in ds_chl.coords) and (lat_name in ds_chl.coords):
+        chl = chl.interp({lon_name: ds_sst[lon_name], lat_name: ds_sst[lat_name]})
+    else:
+        # try auto-detect on CHL dataset
+        chl_lon, chl_lat = get_lon_lat_names(ds_chl)
+        chl = chl.interp({chl_lon: ds_sst[lon_name], chl_lat: ds_sst[lat_name]})
+        chl = chl.rename({chl_lon: lon_name, chl_lat: lat_name})
 
-    # 5) Regrid CHL onto physics grid if needed
-    # (physics is 1/12deg, chl is 1/4deg)
-    if (chl.sizes.get("latitude") != temp.sizes.get("latitude")) or (chl.sizes.get("longitude") != temp.sizes.get("longitude")):
-        chl = chl.interp(latitude=temp["latitude"], longitude=temp["longitude"], method="linear")
+    # UV currents (surface)
+    ds_uv_pt = open_point_nearest(UV_DATASET, t_uv, (bbox[0]+bbox[1])/2, (bbox[2]+bbox[3])/2)
+    u_var = pick_var_from_dataset(ds_uv_pt, PREF_U_VARS)
+    v_var = pick_var_from_dataset(ds_uv_pt, PREF_V_VARS)
+    meta["u_var"] = u_var
+    meta["v_var"] = v_var
+    uv_nc = subset_to_netcdf(UV_DATASET, [u_var, v_var], t_uv, bbox, f"{tmp_dir}/uv.nc")
+    ds_uv = xr.open_dataset(uv_nc)
+    u = to_2d_field(ds_uv[u_var])
+    v = to_2d_field(ds_uv[v_var])
+    # regrid to SST grid if needed
+    uv_lon, uv_lat = get_lon_lat_names(ds_uv)
+    if uv_lon != lon_name or uv_lat != lat_name:
+        u = u.interp({uv_lon: ds_sst[lon_name], uv_lat: ds_sst[lat_name]})
+        v = v.interp({uv_lon: ds_sst[lon_name], uv_lat: ds_sst[lat_name]})
+        u = u.rename({uv_lon: lon_name, uv_lat: lat_name})
+        v = v.rename({uv_lon: lon_name, uv_lat: lat_name})
 
-    if (swh.sizes.get("latitude") != temp.sizes.get("latitude")) or (swh.sizes.get("longitude") != temp.sizes.get("longitude")):
-        swh = swh.interp(latitude=temp["latitude"], longitude=temp["longitude"], method="linear")
+    # Sea level
+    ds_sl_pt = open_point_nearest(SL_DATASET, t_sl, (bbox[0]+bbox[1])/2, (bbox[2]+bbox[3])/2)
+    sl_var = pick_var_from_dataset(ds_sl_pt, PREF_SL_VARS)
+    meta["sl_var"] = sl_var
+    sl_nc = subset_to_netcdf(SL_DATASET, [sl_var], t_sl, bbox, f"{tmp_dir}/sl.nc")
+    ds_sl = xr.open_dataset(sl_nc)
+    sl = to_2d_field(ds_sl[sl_var])
+    sl_lon, sl_lat = get_lon_lat_names(ds_sl)
+    if sl_lon != lon_name or sl_lat != lat_name:
+        sl = sl.interp({sl_lon: ds_sst[lon_name], sl_lat: ds_sst[lat_name]})
+        sl = sl.rename({sl_lon: lon_name, sl_lat: lat_name})
 
-    if (sl.sizes.get("latitude") != temp.sizes.get("latitude")) or (sl.sizes.get("longitude") != temp.sizes.get("longitude")):
-        sl = sl.interp(latitude=temp["latitude"], longitude=temp["longitude"], method="linear")
+    # Waves (optional)
+    wav = None
+    wav_var = None
+    if t_wav:
+        try:
+            ds_wav_pt = open_point_nearest(WAV_DATASET, t_wav, (bbox[0]+bbox[1])/2, (bbox[2]+bbox[3])/2)
+            wav_var = pick_var_from_dataset(ds_wav_pt, PREF_WAV_VARS)
+            meta["wav_var"] = wav_var
+            wav_nc = subset_to_netcdf(WAV_DATASET, [wav_var], t_wav, bbox, f"{tmp_dir}/wav.nc")
+            ds_wav = xr.open_dataset(wav_nc)
+            wav = to_2d_field(ds_wav[wav_var])
+            wlon, wlat = get_lon_lat_names(ds_wav)
+            if wlon != lon_name or wlat != lat_name:
+                wav = wav.interp({wlon: ds_sst[lon_name], wlat: ds_sst[lat_name]})
+                wav = wav.rename({wlon: lon_name, wlat: lat_name})
+        except Exception:
+            wav = None
 
-    if (u.sizes.get("latitude") != temp.sizes.get("latitude")) or (u.sizes.get("longitude") != temp.sizes.get("longitude")):
-        u = u.interp(latitude=temp["latitude"], longitude=temp["longitude"], method="linear")
-    if (v.sizes.get("latitude") != temp.sizes.get("latitude")) or (v.sizes.get("longitude") != temp.sizes.get("longitude")):
-        v = v.interp(latitude=temp["latitude"], longitude=temp["longitude"], method="linear")
+    # Wind (optional)
+    wind_speed = None
+    if t_wind:
+        try:
+            ds_wind_pt = open_point_nearest(WIND_DATASET, t_wind, (bbox[0]+bbox[1])/2, (bbox[2]+bbox[3])/2)
+            wu = pick_var_from_dataset(ds_wind_pt, PREF_WIND_U)
+            wv = pick_var_from_dataset(ds_wind_pt, PREF_WIND_V)
+            meta["wind_u_var"] = wu
+            meta["wind_v_var"] = wv
+            wind_nc = subset_to_netcdf(WIND_DATASET, [wu, wv], t_wind, bbox, f"{tmp_dir}/wind.nc")
+            ds_wind = xr.open_dataset(wind_nc)
+            w_u = to_2d_field(ds_wind[wu])
+            w_v = to_2d_field(ds_wind[wv])
+            wlon, wlat = get_lon_lat_names(ds_wind)
+            if wlon != lon_name or wlat != lat_name:
+                w_u = w_u.interp({wlon: ds_sst[lon_name], wlat: ds_sst[lat_name]})
+                w_v = w_v.interp({wlon: ds_sst[lon_name], wlat: ds_sst[lat_name]})
+                w_u = w_u.rename({wlon: lon_name, wlat: lat_name})
+                w_v = w_v.rename({wlon: lon_name, wlat: lat_name})
+            wind_speed = np.sqrt(w_u.values**2 + w_v.values**2)
+        except Exception:
+            wind_speed = None
 
-    # 6) AOI polygon mask
-    lats = temp["latitude"].values
-    lons = temp["longitude"].values
-    Lon, Lat = np.meshgrid(lons, lats)
-    inside = polygon_mask(Lon, Lat, poly)
+    # Prepare AOI mask
+    lons = ds_sst[lon_name].values
+    lats = ds_sst[lat_name].values
+    grid_lons, grid_lats = np.meshgrid(lons, lats)
+    mask = polygon_mask(poly, grid_lons, grid_lats)
 
-    # Mask outside
-    def apply_mask(arr):
-        a = arr.values.astype("float64")
-        a[~inside] = np.nan
-        return a
+    # ---------------------------
+    # Features (literature-driven set)
+    # Typical tuna habitat models use SST/CHL/SSH + fronts/eddies and often currents/wind. 4
+    # ---------------------------
 
-    temp_a = apply_mask(temp)
-    chl_a  = apply_mask(chl)
-    sl_a   = apply_mask(sl)
-    u_a    = apply_mask(u)
-    v_a    = apply_mask(v)
-    swh_a  = apply_mask(swh)
+    sst_vals = sst.values
+    chl_vals = chl.values
+    cur_speed = np.sqrt(u.values**2 + v.values**2)
+    sl_vals = sl.values
 
-    # 7) Features
-    front_temp = grad_mag(xr.DataArray(temp_a))
-    front_chl  = grad_mag(xr.DataArray(chl_a))
-    eddy_sl    = grad_mag(xr.DataArray(sl_a))
+    # Frontness proxies
+    sst_front = normalize01(grad_mag(sst_vals))
+    chl_front = normalize01(grad_mag(chl_vals))
+    sl_front  = normalize01(grad_mag(sl_vals))
 
-    # Convergence ~ -div(U,V) (simple finite diff proxy)
-    dudx = np.gradient(u_a, axis=1)
-    dvdy = np.gradient(v_a, axis=0)
-    convergence = -(dudx + dvdy)
+    # CHL preference: reward moderate productive waters (not extremes).
+    # Many studies report higher tuna catch around moderate CHL ranges, and strong fronts. 5
+    chl_log = np.log10(np.clip(chl_vals, 1e-4, None))
+    chl_med = np.nanmedian(chl_log)
+    chl_std = np.nanstd(chl_log) + 1e-9
+    chl_pref = 1.0 - np.clip(np.abs(chl_log - chl_med) / (2.0 * chl_std), 0, 1)
 
-    # Suitability windows (baseline, tunable)
-    # Temp peak ~ 28C, sigma ~ 2.5C (broad for "all tuna" MVP)
-    suit_temp = gaussian_suitability(temp_a, mu=28.0, sigma=2.5)
+    # Current suitability for gillnet-like ops: moderate currents preferred (too strong = gear control issues)
+    # Heuristic band-pass around ~0.2–0.8 m/s
+    cs = cur_speed
+    cur_ok = np.exp(-((cs - 0.5) ** 2) / (2 * (0.35 ** 2)))
+    cur_ok = normalize01(cur_ok)
 
-    # CHL: work on log-scale; target ~ 0.15 mg/m3 (broad)
-    chl_safe = np.where(chl_a <= 0, np.nan, chl_a)
-    suit_chl = gaussian_suitability(np.log10(chl_safe), mu=np.log10(0.15), sigma=0.35)
+    # Operational penalties (optional)
+    wav_pen = None
+    if wav is not None:
+        wv = wav.values
+        # penalize high waves; normalize then invert
+        wav_pen = 1.0 - normalize01(wv)
 
-    # Wave penalty (higher waves -> worse for net operations)
-    wave_pen = np.clip(swh_a / 3.0, 0, 1)
+    wind_pen = None
+    if wind_speed is not None:
+        # penalize high winds; normalize then invert
+        wind_pen = 1.0 - normalize01(wind_speed)
 
-    # 8) Normalize + combine
-    F1 = norm01(front_temp)
-    F2 = norm01(front_chl)
-    F3 = norm01(eddy_sl)
-    F4 = norm01(convergence)
+    # ---------------------------
+    # Weighted index -> 0..100
+    # ---------------------------
+    layers = []
+    weights = []
 
-    score = (
-        W_FRONT_TEMP * F1
-        + W_FRONT_CHL * F2
-        + W_EDDY_SL * F3
-        + W_CONVERGENCE * F4
-        + W_SUIT_TEMP * suit_temp
-        + W_SUIT_CHL * suit_chl
-        - W_WAVE_PENALTY * wave_pen
-    )
+    # Core ecological (fronts + productivity)
+    layers += [sst_front, chl_front, chl_pref, sl_front]
+    weights += [0.25,     0.25,      0.20,     0.10]
 
-    # Convert to 0–100 (relative within AOI)
-    prob = 100.0 * norm01(score)
+    # Dynamics (currents)
+    layers += [cur_ok]
+    weights += [0.10]
 
-    # 9) Top-N points
+    # Ops constraints (gillnet): waves/wind if available
+    if wav_pen is not None:
+        layers += [wav_pen]
+        weights += [0.05]
+    if wind_pen is not None:
+        layers += [wind_pen]
+        weights += [0.05]
+
+    W = np.array(weights, dtype=float)
+    W = W / (W.sum() + 1e-12)
+
+    score_raw = np.zeros_like(sst_vals, dtype=float)
+    for w, lay in zip(W, layers):
+        score_raw += w * np.nan_to_num(lay, nan=0.0)
+
+    # Mask outside AOI
+    score_raw = np.where(mask, score_raw, np.nan)
+
+    # Map to "probability-like" 0..100 (not calibrated probability; a suitability index)
+    mu = np.nanmedian(score_raw)
+    sd = np.nanstd(score_raw) + 1e-12
+    z = (score_raw - mu) / sd
+    prob = 100.0 * sigmoid(z)
+    prob = np.where(mask, prob, np.nan)
+
+    # Top-10
     flat = prob.ravel()
-    idx = np.argsort(flat)[::-1][:TOP_N]
-    yy, xx = np.unravel_index(idx, prob.shape)
+    valid = np.isfinite(flat)
+    idx = np.argsort(flat[valid])[::-1][:10]
+    valid_idx = np.where(valid)[0][idx]
+    yy, xx = np.unravel_index(valid_idx, prob.shape)
 
-    top_features = []
-    rows = []
-    for rank, (y, x) in enumerate(zip(yy, xx), start=1):
-        lon = float(lons[x])
-        lat = float(lats[y])
+    # Save GeoJSON + CSV-like text
+    features = []
+    rows = ["rank,lon,lat,prob,sst,chl,current_speed,ssh"]
+    for i, (y, x) in enumerate(zip(yy, xx), start=1):
+        lon = float(grid_lons[y, x])
+        lat = float(grid_lats[y, x])
         p = float(prob[y, x])
-        rows.append((rank, lon, lat, p, float(temp_a[y, x]), float(chl_a[y, x]), float(sl_a[y, x]), float(swh_a[y, x])))
-
-        top_features.append({
+        features.append({
             "type": "Feature",
             "properties": {
-                "rank": rank,
-                "probability_0_100": p,
-                "temp_C": float(temp_a[y, x]),
-                "chl_mg_m3": float(chl_a[y, x]),
-                "sea_level_m": float(sl_a[y, x]),
-                "swh_m": float(swh_a[y, x]),
-                "date": day.isoformat()
+                "rank": i,
+                "prob_0_100": p,
+                "sst": float(sst_vals[y, x]),
+                "chl": float(chl_vals[y, x]),
+                "current_speed": float(cur_speed[y, x]),
+                "ssh": float(sl_vals[y, x]),
             },
-            "geometry": {"type": "Point", "coordinates": [lon, lat]}
+            "geometry": {"type": "Point", "coordinates": [lon, lat]},
         })
+        rows.append(f"{i},{lon},{lat},{p:.2f},{sst_vals[y,x]:.4f},{chl_vals[y,x]:.6f},{cur_speed[y,x]:.4f},{sl_vals[y,x]:.4f}")
 
-    out_geo = {"type": "FeatureCollection", "features": top_features}
+    out_geo = {"type": "FeatureCollection", "features": features}
     with open(f"{OUT_DIR}/hotspots.geojson", "w", encoding="utf-8") as f:
-        json.dump(out_geo, f, ensure_ascii=False)
+        json.dump(out_geo, f, ensure_ascii=False, indent=2)
 
-    # CSV
     with open(f"{OUT_DIR}/top10.csv", "w", encoding="utf-8") as f:
-        f.write("rank,lon,lat,probability_0_100,temp_C,chl_mg_m3,sea_level_m,swh_m\n")
-        for r in rows:
-            f.write(",".join([str(x) for x in r]) + "\n")
+        f.write("\n".join(rows) + "\n")
 
-    # 10) Plot (red->yellow->green) + top labels
-    plt.figure(figsize=(10, 7))
-    plt.imshow(prob, origin="lower", vmin=0, vmax=100, cmap="RdYlGn")
-    plt.colorbar(label="Fishing probability (0–100, relative within AOI)")
-    plt.title(f"Tuna Hotspot Probability | {day.isoformat()}")
+    with open(f"{OUT_DIR}/metadata.json", "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=2)
 
-    # overlay top points
-    for rank, (y, x) in enumerate(zip(yy, xx), start=1):
-        plt.scatter([x], [y], s=35, marker="o", edgecolors="black")
-        plt.text(x + 1, y + 1, str(rank), fontsize=10, weight="bold")
+    # Plot probability map (red->yellow->green)
+    plt.figure(figsize=(10, 6))
+    im = plt.imshow(prob, origin="lower", vmin=0, vmax=100, cmap="RdYlGn")
+    plt.colorbar(im, label="Fishing suitability (0–100)")
 
+    # overlay top10 points
+    plt.scatter(xx, yy, s=30, marker="o", edgecolors="black", linewidths=0.8)
+
+    # title with times used
+    title = f"Tuna suitability (AOI) | SST:{t_sst.date()} CHL:{t_chl.date()} UV:{t_uv.date()} SL:{t_sl.date()}"
+    plt.title(title)
+    plt.tight_layout()
     plt.savefig(f"{OUT_DIR}/probability.png", dpi=160, bbox_inches="tight")
     plt.close()
 
-    # 11) Minimal report
-    with open(f"{OUT_DIR}/report.txt", "w", encoding="utf-8") as f:
-        f.write(f"Date used (common): {day.isoformat()}\n")
-        f.write("Top points:\n")
-        for r in rows:
-            f.write(f"#{r[0]} lon={r[1]:.5f} lat={r[2]:.5f} prob={r[3]:.1f} temp={r[4]:.2f}C chl={r[5]:.3f} sl={r[6]:.3f}m swh={r[7]:.2f}m\n")
-
     print("Done.")
-
+    print("Outputs:")
+    print(f"- {OUT_DIR}/hotspots.geojson")
+    print(f"- {OUT_DIR}/top10.csv")
+    print(f"- {OUT_DIR}/probability.png")
+    print(f"- {OUT_DIR}/metadata.json")
 
 if __name__ == "__main__":
     main()
