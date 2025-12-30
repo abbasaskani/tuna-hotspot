@@ -1,7 +1,0 @@
-copernicusmarine
-xarray
-netCDF4
-numpy
-pandas
-matplotlib
-shapely
