@@ -1,21 +1,22 @@
-# Core: Copernicus Marine Toolbox (Python)
-copernicusmarine>=1.3.0,<2.0
+# Copernicus Marine Toolbox (Python API)
+# Pin to a stable release that exists on PyPI (v2.x; v1.x is yanked/ignored by pip)
+copernicusmarine==2.2.5
 
-# Numerical + array processing
+# Core scientific stack
 numpy>=1.26,<3.0
-
-# NetCDF + labeled arrays (Copernicus outputs are NetCDF)
-xarray>=2024.1.0,<2026.0
-netCDF4>=1.6.5
-
-# Interpolation/regridding helpers used by xarray (.interp)
 scipy>=1.11,<2.0
+xarray>=2024.1,<2026.0
 
-# Plotting (probability map + overlays)
+# NetCDF I/O (install both engines to reduce "engine not found" issues)
+netCDF4>=1.6.5
+h5netcdf>=1.3.0
+h5py>=3.10
+
+# Plotting (headless OK on GitHub runners)
 matplotlib>=3.8,<4.0
 
-# Robust time handling often needed with ocean datasets
+# Time handling often required by ocean NetCDF
 cftime>=1.6.3
 
-# Optional but commonly required by xarray IO stack (safe to include)
+# Small but safe utilities
 packaging>=23.2
