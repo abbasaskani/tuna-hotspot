@@ -1,6 +1,21 @@
-copernicusmarine>=1.3.0
-numpy
-xarray
-netCDF4
-matplotlib
-scipy
+# Core: Copernicus Marine Toolbox (Python)
+copernicusmarine>=1.3.0,<2.0
+
+# Numerical + array processing
+numpy>=1.26,<3.0
+
+# NetCDF + labeled arrays (Copernicus outputs are NetCDF)
+xarray>=2024.1.0,<2026.0
+netCDF4>=1.6.5
+
+# Interpolation/regridding helpers used by xarray (.interp)
+scipy>=1.11,<2.0
+
+# Plotting (probability map + overlays)
+matplotlib>=3.8,<4.0
+
+# Robust time handling often needed with ocean datasets
+cftime>=1.6.3
+
+# Optional but commonly required by xarray IO stack (safe to include)
+packaging>=23.2
