@@ -2,7 +2,7 @@ name: Daily Tuna Hotspots
 
 on:
   schedule:
-    - cron: "0 4 * * *"   # 04:00 UTC
+    - cron: "0 4 * * *"
   workflow_dispatch:
 
 permissions:
@@ -16,6 +16,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -31,10 +33,6 @@ jobs:
         env:
           COPERNICUSMARINE_SERVICE_USERNAME: ${{ secrets.COPERNICUSMARINE_SERVICE_USERNAME }}
           COPERNICUSMARINE_SERVICE_PASSWORD: ${{ secrets.COPERNICUSMARINE_SERVICE_PASSWORD }}
-          # اختیاری: اگر گذاشتید، بعداً می‌شود effort/فیلترهای بیشتر اضافه کرد
-          GFW_API_ACCESS_TOKEN: ${{ secrets.GFW_API_ACCESS_TOKEN }}
-          # اختیاری: برای تست دستی یک تاریخ مشخص
-          # RUN_DATE: "2025-12-30"
         run: |
           python src/run_daily.py
 
