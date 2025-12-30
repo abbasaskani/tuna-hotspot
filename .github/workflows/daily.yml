@@ -2,11 +2,9 @@ name: Daily Tuna Hotspots
 
 on:
   schedule:
-    # 04:00 UTC every day
     - cron: "0 4 * * *"
   workflow_dispatch:
 
-# Needed because we commit/push outputs back to the repo
 permissions:
   contents: write
 
@@ -18,17 +16,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          persist-credentials: true
-          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: "pip"
-          cache-dependency-path: |
-            requirements.txt
 
       - name: Install deps
         run: |
@@ -39,7 +31,7 @@ jobs:
         env:
           COPERNICUSMARINE_SERVICE_USERNAME: ${{ secrets.COPERNICUSMARINE_SERVICE_USERNAME }}
           COPERNICUSMARINE_SERVICE_PASSWORD: ${{ secrets.COPERNICUSMARINE_SERVICE_PASSWORD }}
-          # Optional (only if you later add GFW usage in code)
+          # اختیاری (فعلاً در کد استفاده اجباری ندارد)
           GFW_API_ACCESS_TOKEN: ${{ secrets.GFW_API_ACCESS_TOKEN }}
         run: |
           python src/run_daily.py
@@ -48,17 +40,6 @@ jobs:
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
-
-          git add docs/latest/* || true
-
-          # If nothing changed, exit cleanly
-          if git diff --cached --quiet; then
-            echo "No changes to commit."
-            exit 0
-          fi
-
-          git commit -m "Daily hotspots update"
-
-          # Avoid non-fast-forward if repo changed meanwhile
-          git pull --rebase origin "${GITHUB_REF_NAME}"
-          git push origin "${GITHUB_REF_NAME}"
+          git add docs/latest/*
+          git commit -m "Daily hotspots update" || exit 0
+          git push
