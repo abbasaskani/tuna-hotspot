@@ -1,7 +1,5 @@
-copernicusmarine
+copernicusmarine>=2.2.5
+numpy
 xarray
 netCDF4
-numpy
-pandas
 matplotlib
-shapely
