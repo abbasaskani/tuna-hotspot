@@ -1,0 +1,23 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "name": "W Arabian Sea (Demo AOI)"
+      },
+      "geometry": {
+        "type": "Polygon",
+        "coordinates": [
+          [
+            [52.0, 6.0],
+            [66.0, 6.0],
+            [66.0, 24.0],
+            [52.0, 24.0],
+            [52.0, 6.0]
+          ]
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,82 @@
+{
+  "skipjack": {
+    "label": {
+      "en": "Skipjack tuna",
+      "fa": "اسکیپ‌جک"
+    },
+    "scientific_name": "Katsuwonus pelamis",
+    "region": "W Arabian Sea",
+    "priors": {
+      "sst_opt_c": 28.0,
+      "sst_sigma_c": 3.0,
+      "chl_opt_mg_m3": 0.2,
+      "chl_sigma_log10": 0.6,
+      "current_opt_m_s": 0.4,
+      "current_sigma_m_s": 0.25,
+      "waves_hs_soft_max_m": 1.5,
+      "front_weights": {
+        "temp": 0.5,
+        "chl": 0.25,
+        "ssh": 0.25
+      }
+    },
+    "layer_weights": {
+      "temp": 0.3,
+      "chl": 0.25,
+      "front": 0.25,
+      "current": 0.1,
+      "waves": 0.1
+    },
+    "ops_constraints": {
+      "waves_hs_soft_max_m": 1.5,
+      "currents_soft_max_m_s": 0.9
+    },
+    "references": [
+      "Elith & Leathwick (2009) SDM overview",
+      "Phillips et al. (2006) MaxEnt",
+      "Renner & Warton (2013) MaxEnt~PPP",
+      "Lehodey et al. (2008) SEAPODYM"
+    ],
+    "notes": "Priors are defaults; tune with AIS-effort/feedback/ensemble for the target region."
+  },
+  "yellowfin": {
+    "label": {
+      "en": "Yellowfin tuna",
+      "fa": "یلّوفین"
+    },
+    "scientific_name": "Thunnus albacares",
+    "region": "W Arabian Sea",
+    "priors": {
+      "sst_opt_c": 27.0,
+      "sst_sigma_c": 3.5,
+      "chl_opt_mg_m3": 0.15,
+      "chl_sigma_log10": 0.65,
+      "current_opt_m_s": 0.35,
+      "current_sigma_m_s": 0.25,
+      "waves_hs_soft_max_m": 1.5,
+      "front_weights": {
+        "temp": 0.5,
+        "chl": 0.25,
+        "ssh": 0.25
+      }
+    },
+    "layer_weights": {
+      "temp": 0.32,
+      "chl": 0.23,
+      "front": 0.25,
+      "current": 0.1,
+      "waves": 0.1
+    },
+    "ops_constraints": {
+      "waves_hs_soft_max_m": 1.5,
+      "currents_soft_max_m_s": 0.8
+    },
+    "references": [
+      "Elith & Leathwick (2009) SDM overview",
+      "Phillips et al. (2006) MaxEnt",
+      "Renner & Warton (2013) MaxEnt~PPP",
+      "Lehodey et al. (2008) SEAPODYM"
+    ],
+    "notes": "Priors are defaults; tune with AIS-effort/feedback/ensemble for the target region."
+  }
+}
