@@ -1,0 +1,20 @@
+{
+  "name": "Seyd‑Yaar | صیدیار",
+  "short_name": "Seyd‑Yaar",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#021624",
+  "theme_color": "#03243b",
+  "icons": [
+    {
+      "src": "assets/logo.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "assets/logo.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

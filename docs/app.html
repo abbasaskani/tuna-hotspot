@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Seyd‑Yaar App</title>
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#03243b" />
+  <link rel="icon" href="assets/logo.png" />
+  <link rel="stylesheet" href="styles.css" />
+
+  <!-- Leaflet -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
+</head>
+<body class="ocean appPage">
+
+  <header class="topbar glass">
+    <button id="langToggle" class="chip">FA / EN</button>
+    <div class="brand">
+      <div class="title">Seyd‑Yaar</div>
+      <div class="subtitle" id="subtitle">Catch Probability (Habitat × Ops) + Uncertainty</div>
+    </div>
+    <div class="logoWrap">
+      <img class="logo spinFloat" src="assets/logo.png" alt="Seyd-Yaar logo" />
+    </div>
+  </header>
+
+  <main class="appLayout">
+    <aside class="panel glass" id="panel">
+      <div class="row">
+        <label class="lbl" id="lblRun">Run</label>
+        <select id="runSelect"></select>
+      </div>
+
+      <div class="row">
+        <label class="lbl" id="lblVariant">QC / Gap‑Fill</label>
+        <select id="variantSelect"></select>
+      </div>
+
+      <div class="row">
+        <label class="lbl" id="lblSpecies">Species</label>
+        <select id="speciesSelect">
+          <option value="skipjack">Skipjack</option>
+          <option value="yellowfin">Yellowfin</option>
+        </select>
+      </div>
+
+      <div class="row">
+        <label class="lbl" id="lblModel">Model</label>
+        <select id="modelSelect">
+          <option value="ensemble">Ensemble (default)</option>
+          <option value="scoring">Scoring</option>
+          <option value="frontplus">Front+ (Scoring)</option>
+          <option value="ppp">MaxEnt/PPP</option>
+        </select>
+      </div>
+
+      <div class="row">
+        <label class="lbl" id="lblMap">Map</label>
+        <select id="mapSelect">
+          <option value="pcatch">Pcatch (Habitat×Ops)</option>
+          <option value="phab">Habitat Suitability</option>
+          <option value="pops">Operational Feasibility</option>
+          <option value="agree">Agreement (ensemble)</option>
+          <option value="spread">Spread/Std (ensemble)</option>
+          <option value="conf">Confidence / Opacity</option>
+        </select>
+      </div>
+
+      <div class="row">
+        <label class="lbl" id="lblAgg">Aggregation</label>
+        <select id="aggSelect">
+          <option value="p90" selected>P90 (default)</option>
+          <option value="mean">Mean</option>
+          <option value="median">Median</option>
+          <option value="max">Max</option>
+        </select>
+      </div>
+
+      <div class="row two">
+        <div>
+          <label class="lbl" id="lblFrom">From</label>
+          <select id="t0Select"></select>
+        </div>
+        <div>
+          <label class="lbl" id="lblTo">To</label>
+          <select id="t1Select"></select>
+        </div>
+      </div>
+
+      <div class="row two">
+        <button id="playBtn" class="btnPrimary">▶ Play</button>
+        <select id="stepSelect">
+          <option value="2" selected>2h</option>
+          <option value="6">6h</option>
+          <option value="12">12h</option>
+        </select>
+      </div>
+
+      <div class="row">
+        <label class="lbl">QC Mask (Chl)</label>
+        <label class="switch">
+          <input type="checkbox" id="qcToggle" checked />
+          <span class="slider"></span>
+        </label>
+        <span class="muted small" id="qcHint">Masks low‑quality pixels (opacity)</span>
+      </div>
+
+      <div class="row">
+        <label class="lbl">Gap‑fill</label>
+        <label class="switch">
+          <input type="checkbox" id="gapToggle" />
+          <span class="slider"></span>
+        </label>
+        <span class="muted small" id="gapHint">Uses precomputed gap‑filled variant</span>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="row">
+        <button id="downloadPngBtn" class="btnGhost">Download PNG</button>
+        <button id="downloadGeoBtn" class="btnGhost">Download GeoJSON</button>
+      </div>
+
+      <div class="row">
+        <button id="feedbackBtn" class="btnNeon">+ Feedback</button>
+        <button id="exportFbBtn" class="btnGhost">Export feedback</button>
+      </div>
+
+      <div class="divider"></div>
+
+      <details class="details" open>
+        <summary id="sumTop">Top‑10 Hotspots</summary>
+        <div id="top10Table" class="tableWrap"></div>
+      </details>
+
+      <details class="details">
+        <summary id="sumProfile">Species Profile (Explainable)</summary>
+        <div id="profileBox" class="profileBox"></div>
+      </details>
+
+      <details class="details">
+        <summary id="sumAudit">Audit / meta.json</summary>
+        <pre id="auditBox" class="auditBox"></pre>
+      </details>
+
+      <div class="footerMini">
+        <div>Designed by: عباس آسکانی - Abbas Askani</div>
+        <div class="bigCompanyMini">Askani Fishing Data company</div>
+      </div>
+    </aside>
+
+    <section class="mapWrap glass">
+      <div id="map"></div>
+      <div id="legend" class="legend glass"></div>
+    </section>
+  </main>
+
+  <!-- Feedback modal -->
+  <div id="modal" class="modal hidden">
+    <div class="modalCard glass">
+      <div class="modalHeader">
+        <div class="modalTitle" id="fbTitle">Feedback</div>
+        <button id="closeModal" class="chip">✕</button>
+      </div>
+      <div class="modalBody">
+        <div class="row">
+          <label class="lbl" id="fbLblRating">Rating</label>
+          <select id="fbRating">
+            <option value="excellent">Excellent</option>
+            <option value="good">Good</option>
+            <option value="ok">OK</option>
+            <option value="bad">Bad</option>
+            <option value="very_bad">Very bad</option>
+          </select>
+        </div>
+        <div class="row two">
+          <div>
+            <label class="lbl">Lat</label>
+            <input id="fbLat" type="number" step="0.0001" />
+          </div>
+          <div>
+            <label class="lbl">Lon</label>
+            <input id="fbLon" type="number" step="0.0001" />
+          </div>
+        </div>
+        <div class="row">
+          <label class="lbl" id="fbLblDepth">Gear depth (m)</label>
+          <select id="fbDepth">
+            <option>5</option><option selected>10</option><option>15</option><option>20</option>
+          </select>
+        </div>
+        <div class="row">
+          <label class="lbl" id="fbLblNotes">Notes (optional)</label>
+          <textarea id="fbNotes" rows="3" placeholder="..."></textarea>
+        </div>
+        <div class="row">
+          <button id="saveFbBtn" class="btnPrimary">Save locally</button>
+          <div class="muted small" id="fbHint">Saved to IndexedDB. Anti‑spam: rate‑limit + basic validation.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+  <script src="app.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
+  </script>
+</body>
+</html>

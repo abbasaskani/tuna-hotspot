@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Seyd‑Yaar | صیدیار</title>
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#03243b" />
+  <link rel="icon" href="assets/logo.png" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body class="ocean">
+  <header class="topbar glass">
+    <button id="langToggle" class="chip">FA / EN</button>
+    <div class="brand">
+      <div class="title">Seyd‑Yaar</div>
+      <div class="subtitle">Smart Tuna Catch Probability • PWA</div>
+    </div>
+    <div class="logoWrap">
+      <img class="logo spinFloat" src="assets/logo.png" alt="Seyd-Yaar logo" />
+    </div>
+  </header>
+
+  <main class="container">
+    <section class="hero glass">
+      <div class="heroLeft">
+        <h1 id="h1">Habitat × Operations → Catch Probability 🐟🌊</h1>
+        <p id="p1" class="muted">
+          Two scientific maps—Habitat Suitability (Phabitat) and Operational Feasibility (Pops)—combine into a single
+          catchability score: <b>Pcatch = Phabitat × Pops</b>. Includes uncertainty (ensemble agreement/spread),
+          explainable top‑10 hotspots, and offline install.
+        </p>
+
+        <div class="ctaRow">
+          <a class="btnPrimary" href="app.html" id="launchBtn">Launch Demo</a>
+          <button class="btnGhost" id="installBtn" disabled>Install PWA</button>
+        </div>
+
+        <div class="pillRow">
+          <span class="pill neonLime">Dynamic Map</span>
+          <span class="pill neonYellow">Species Mode</span>
+          <span class="pill neonOrange">Timeline + Aggregation</span>
+          <span class="pill neonBlue">Audit meta.json</span>
+        </div>
+      </div>
+
+      <div class="heroRight">
+        <div class="previewCard">
+          <div class="previewHeader">
+            <span id="prevTitle">Latest preview</span>
+            <span class="muted" id="prevMeta">Loading…</span>
+          </div>
+          <img id="previewImg" class="previewImg" src="latest/preview.png" alt="preview" />
+          <div class="previewFooter muted" id="prevFooter">
+            Tip: open the app to explore range aggregation, uncertainty, top‑10 and feedback.
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="grid2">
+      <div class="card glass">
+        <h2 id="h2a">What’s inside ✅</h2>
+        <ul class="bullets" id="bul1">
+          <li>Habitat vs Ops separation with default <b>Pcatch</b></li>
+          <li>Uncertainty: <b>Agreement</b> + <b>Spread/Std</b></li>
+          <li>Species profiles: Skipjack & Yellowfin (editable priors)</li>
+          <li>Time range: past up to 7 days + forecast 3–4 days (demo is fast)</li>
+          <li>Aggregation: Mean / Median / Max / <b>P90</b> (default)</li>
+          <li>Feedback saved locally (IndexedDB) with validation + rate limit</li>
+        </ul>
+      </div>
+
+      <div class="card glass">
+        <h2 id="h2b">Credits</h2>
+        <div class="bigCompany">Askani Fishing Data company</div>
+        <div class="muted">
+          Designed by: <b>عباس آسکانی — Abbas Askani</b>
+        </div>
+        <div class="muted">
+          PWA + generator demo included in this ZIP. Production hooks: AIS effort, MaxEnt/PPP, GeoTIFF/COG.
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer glass">
+    <div>Designed by: عباس آسکانی - Abbas Askani</div>
+    <div class="muted">Askani Fishing Data company</div>
+  </footer>
+
+  <script src="home.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js');
+  </script>
+</body>
+</html>
