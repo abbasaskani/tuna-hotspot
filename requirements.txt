@@ -1,6 +1,0 @@
-copernicusmarine==2.2.5
-numpy>=1.26
-xarray>=2024.6.0
-matplotlib>=3.8
-shapely>=2.0.3
-netcdf4>=1.6.5
